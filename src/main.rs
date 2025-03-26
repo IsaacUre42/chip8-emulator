@@ -1,3 +1,5 @@
+// Thanks to: https://tobiasvl.github.io/blog/write-a-chip-8-emulator/
+
 fn main() {
     let mut memory: [u8; 4096] = [0; 4096];
     let mut program_counter: u16 = 0x0;
