@@ -74,17 +74,17 @@ impl Emulator {
         for byte in sprite {
             let offset = (position as usize + (y*DISPLAY_WIDTH)) % 8;
             let mut index = (position as usize + (y*DISPLAY_WIDTH)).div(8);
-            if offset != 0 {
-                let mut untouched = self.buffer[index] >> (8 - offset) << (8 - offset);
-                let mut touched = (self.buffer[index] ^ (byte >> offset)) << offset >> offset;
-                self.buffer[index] = untouched | touched;
-                index += 1;
-                untouched = self.buffer[index] << offset >> offset;
-                touched = (self.buffer[index] ^ byte << (8 - offset)) >> (8 - offset) << (8 - offset);
-                self.buffer[index] = untouched | touched;
-            } else {
-                let reversed = byte.reverse_bits();
+            if offset == 0 {
                 self.buffer[index] ^= byte;
+            } else {
+                let combined = ((self.buffer[index] as u16) << 8) | (self.buffer[index + 1] as u16);
+                let flipper = (*byte as u16) << (8 - offset);
+                let flipped = (combined ^ flipper) & ((0xFFu16) << (8 - offset));
+                let first = (flipped >> 8) as u8;
+                let second = flipped as u8;
+
+                self.buffer[index] = first | ((self.buffer[index] >> (8-offset)) << (8 - offset));
+                self.buffer[index + 1] = second | (self.buffer[index + 1] << offset >> offset);
             }
 
             y += 1;
@@ -101,7 +101,7 @@ impl Emulator {
             if changed_bits != 0 {
                 for bit_offset in 0..8 {
                     if (changed_bits & (1 << bit_offset)) != 0 {
-                        let pixel_index = (byte_idx * 8) + bit_offset;
+                        let pixel_index = (byte_idx * 8) + (7-bit_offset);
 
                         if pixel_index < self.color_display_buffer.len() {
                             // Update color based on new pixel state
@@ -145,7 +145,8 @@ fn main() {
 
     let sprite: Vec<u8> = vec![0xF0, 0x80, 0xF0, 0x80, 0x80];
     emulator.draw_sprite(&sprite, 0);
-    emulator.draw_sprite(&sprite, 7);
+    // emulator.buffer[0] = 0b01000000;
+    emulator.draw_sprite(&sprite, 4);
     emulator.translate_buffer();
 
     // Limit to 60 fps
