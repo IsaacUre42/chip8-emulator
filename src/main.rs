@@ -424,7 +424,7 @@ fn main() {
 
     let mut running = true;
     // 700 Instructions per second standard
-    let target_hz = Duration::from_secs_f64(1.0/1000.0);
+    let target_hz = Duration::from_secs_f64(1.0/700.0);
     // Limit to 60 fps
     let target_frame_time = Duration::from_secs_f64(1.0 / 60.0);
 
