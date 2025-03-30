@@ -86,7 +86,7 @@ impl Emulator {
         let nnn = instruction & 0xFFF;
 
         //Execute
-        println!("{:04x}, {}", instruction, self.program_counter);
+        // println!("{:04x}, {}", instruction, self.program_counter);
         match nibble {
             0x0 => {
                 match n {
@@ -136,7 +136,8 @@ impl Emulator {
             },
             0x7 => {
                 // Add
-                self.registers[x as usize] += nn;
+                let operation = self.registers[x as usize].overflowing_add(nn);
+                self.registers[x as usize] = operation.0;
             },
             0x8 => {
                 match n {
@@ -251,11 +252,75 @@ impl Emulator {
                     0x18 => {
                         self.sound_timer = self.registers[x as usize];
                     }
+                    0x1E => {
+                        let operation = self.index_register + self.registers[x as usize] as u16;
+                        if (operation > 0x1000) && (self.index_register <= 0x0FFF) {
+                            self.registers[0xF] = 1;
+                        }
+                        self.index_register = operation;
+                    },
+                    0x0A => {
+                        // Block until key press
+                        let operation = self.get_key();
+                        if !operation.1 {
+                            if self.memory[0] != 0 {
+                                self.registers[x as usize] = self.memory[0];
+                                self.memory[0] = 0;
+                            } else {
+                                self.program_counter -= 2;   
+                            }
+                        } else {
+                            if self.memory[0] != operation.0 {
+                                self.memory[0] = operation.0;
+                                self.program_counter -= 2;
+                            }
+                        }
+                    }
+                    0x29 => {
+                        let character = self.registers[x as usize];
+                        self.index_register = self.get_font_character(character);
+                    }
+                    0x33 => {
+                        let number = self.registers[x as usize];
+                        let first = number.div(100);
+                        let second = (number % 100) / 10;
+                        let third = number % 10;
+                        let index = self.index_register as usize;
+                        self.memory[index] = first;
+                        self.memory[index + 1] = second;
+                        self.memory[index + 2] = third;
+                    }
+                    0x55 => {
+                        // Store Registers to Memory
+                        for i in 0..(x + 1) {
+                            self.memory[(self.index_register + i as u16) as usize] = self.registers[i as usize];
+                        }
+                    }
+                    0x65 => {
+                        // Load Registers from Memory
+                        for i in 0..(x + 1) {
+                            self.registers[i as usize] = self.memory[(self.index_register + i as u16) as usize];
+                        }
+                    }
                     _ => {}
                 }
             }
             _ => {}
         }
+    }
+
+    fn get_key(&self) -> (u8, bool) {
+        let mut counter: u8 = 0;
+        let mut pressed = false;
+        while counter <= 0xF && !pressed{
+            pressed = self.check_input(counter);
+            counter += 1;
+        }
+        (counter, pressed)
+    }
+
+    fn get_font_character(&self, character: u8) -> u16 {
+        0x050 + (character as u16) * 5
     }
 
     fn check_input(&self, key: u8) -> bool {
@@ -359,12 +424,11 @@ fn main() {
 
     let mut running = true;
     // 700 Instructions per second standard
-    let target_hz = Duration::from_secs_f64(1.0/700.0);
+    let target_hz = Duration::from_secs_f64(1.0/1000.0);
     // Limit to 60 fps
     let target_frame_time = Duration::from_secs_f64(1.0 / 60.0);
 
-    load_rom_into_memory(&mut emulator.memory, "roms/ibm.ch8".to_string(), 512);
-    
+    load_rom_into_memory(&mut emulator.memory, "roms/RPS.ch8".to_string(), 512);
 
     let mut frame_delay = Instant::now();
     let mut hz_delay = Instant::now();
