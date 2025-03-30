@@ -4,6 +4,8 @@ use std::iter::zip;
 use std::ops::Div;
 use std::time::{Duration, Instant};
 use minifb::{Key, Window, WindowOptions, ScaleMode};
+use fastrand::u8;
+use minifb::Key::{Key1, Key2, Key3, Key4};
 
 const DISPLAY_WIDTH: usize = 64;
 const DISPLAY_HEIGHT: usize = 32;
@@ -21,7 +23,8 @@ struct Emulator {
     buffer: [u8; DISPLAY_WIDTH * DISPLAY_HEIGHT],
     prev_buffer: [u8; DISPLAY_WIDTH * DISPLAY_HEIGHT],
     color_display_buffer: Vec<u32>,
-    window: Window
+    window: Window,
+    shift_mode: bool,
 }
 
 impl Emulator {
@@ -49,7 +52,8 @@ impl Emulator {
             buffer: [0; DISPLAY_WIDTH * DISPLAY_HEIGHT],
             prev_buffer: [0; DISPLAY_WIDTH * DISPLAY_HEIGHT],
             color_display_buffer: vec![0; DISPLAY_WIDTH * DISPLAY_HEIGHT],
-            window
+            window,
+            shift_mode: false
         }
     }
     
@@ -85,15 +89,47 @@ impl Emulator {
         println!("{:04x}, {}", instruction, self.program_counter);
         match nibble {
             0x0 => {
-                // Clear Screen Buffer
-                for byte in self.buffer.iter_mut() {
-                    *byte = 0;
+                match n {
+                    0x0 => {
+                        // Clear Screen Buffer
+                        for byte in self.buffer.iter_mut() {
+                            *byte = 0;
+                        }
+                    }
+                    0xE => {
+                        // Exit from subroutine
+                        self.program_counter = self.stack.pop().unwrap();
+                    },
+                    _ => {}
                 }
             },
             0x1 => {
                 // Jump
                 self.program_counter = nnn;
             },
+            0x2 => {
+                // Enter Subroutine
+                self.stack.push(self.program_counter);
+                self.program_counter = nnn;
+            },
+            0x3 => {
+                // Conditional skip
+                if self.registers[x as usize] == nn {
+                    self.program_counter += 2;
+                }
+            },
+            0x4 => {
+                // Conditional skip
+                if self.registers[x as usize] != nn {
+                    self.program_counter += 2;
+                }
+            },
+            0x5 => {
+                // Conditional skip
+                if self.registers[x as usize] == self.registers[y as usize] {
+                    self.program_counter += 2;
+                }
+            }
             0x6 => {
                 // Set
                 self.registers[x as usize] = nn;
@@ -102,10 +138,81 @@ impl Emulator {
                 // Add
                 self.registers[x as usize] += nn;
             },
+            0x8 => {
+                match n {
+                    0x0 => {
+                        // Set
+                        self.registers[x as usize] = self.registers[y as usize]
+                    },
+                    0x1 => {
+                        // OR
+                        self.registers[x as usize] |= self.registers[y as usize]
+                    },
+                    0x2 => {
+                        // AND
+                        self.registers[x as usize] &= self.registers[y as usize]
+                    },
+                    0x3 => {
+                        // XOR
+                        self.registers[x as usize] ^= self.registers[y as usize]
+                    },
+                    0x4 => {
+                        // Add
+                        let operation = self.registers[x as usize].overflowing_add(self.registers[y as usize]);
+                        self.registers[x as usize] = operation.0;
+                        self.registers[0xF] = if operation.1 {1} else {0};
+                    },
+                    0x5 => {
+                        // Sub
+                        let operation = self.registers[x as usize].overflowing_sub(self.registers[y as usize]);
+                        self.registers[x as usize] = operation.0;
+                        self.registers[0xF] = if operation.1 {0} else {1};
+                    },
+                    0x6 => {
+                        // Shift
+                        if self.shift_mode {
+                            self.registers[x as usize] = self.registers[y as usize];
+                        }
+                        let bit = self.registers[x as usize] & 1;
+                        self.registers[x as usize] >>= 1;
+                        self.registers[0xF] = if bit == 0 {0} else {1};
+                    },
+                    0x7 => {
+                        // Sub
+                        let operation = self.registers[y as usize].overflowing_sub(self.registers[x as usize]);
+                        self.registers[x as usize] = operation.0;
+                        self.registers[0xF] = if operation.1 {0} else {1};
+                    },
+                    0xE => {
+                        // Shift
+                        if self.shift_mode {
+                            self.registers[x as usize] = self.registers[y as usize];
+                        }
+                        let bit = self.registers[x as usize] & 0b1000_0000;
+                        self.registers[x as usize] <<= 1;
+                        self.registers[0xF] = if bit == 0 {0} else {1};
+                    },
+                    _ => {}
+                }
+            },
+            0x9 => {
+                // Conditional skip
+                if self.registers[x as usize] != self.registers[y as usize] {
+                    self.program_counter += 2;
+                }
+            },
             0xA => {
                 // Set Index Register I
                 self.index_register = nnn;
             },
+            0xB => {
+                // Jump plus offset
+                self.program_counter = nnn + (self.registers[0] as u16)
+            },
+            0xC => {
+                let random = u8(0..u8::MAX);
+                self.registers[x as usize] = nn & random;
+            }
             0xD => {
                 // Draw Stuff
                 let start = self.index_register as usize;
@@ -116,7 +223,60 @@ impl Emulator {
                 let position = x_pos + (y_pos * DISPLAY_WIDTH as u16);
                 self.draw_sprite(&sprite, position as usize);
             }
+            0xE => {
+                // Skip if key
+                match nn {
+                    0x9E => {
+                        if self.check_input(self.registers[x as usize]) {
+                            self.program_counter += 2;
+                        }
+                    },
+                    0xA1 => {
+                        if !self.check_input(self.registers[x as usize]) {
+                            self.program_counter += 2;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            0xF => {
+                // Timers
+                match nn {
+                    0x07 => {
+                        self.registers[x as usize] = self.delay_timer;
+                    }
+                    0x15 => {
+                        self.delay_timer = self.registers[x as usize];
+                    }
+                    0x18 => {
+                        self.sound_timer = self.registers[x as usize];
+                    }
+                    _ => {}
+                }
+            }
             _ => {}
+        }
+    }
+
+    fn check_input(&self, key: u8) -> bool {
+        match key {
+            0x0 => {self.window.is_key_down(Key::X)},
+            0x1 => {self.window.is_key_down(Key1)},
+            0x2 => {self.window.is_key_down(Key2)},
+            0x3 => {self.window.is_key_down(Key3)},
+            0x4 => {self.window.is_key_down(Key::Q)},
+            0x5 => {self.window.is_key_down(Key::W)},
+            0x6 => {self.window.is_key_down(Key::E)},
+            0x7 => {self.window.is_key_down(Key::A)},
+            0x8 => {self.window.is_key_down(Key::S)},
+            0x9 => {self.window.is_key_down(Key::D)},
+            0xA => {self.window.is_key_down(Key::Z)},
+            0xB => {self.window.is_key_down(Key::C)},
+            0xC => {self.window.is_key_down(Key4)},
+            0xD => {self.window.is_key_down(Key::R)},
+            0xE => {self.window.is_key_down(Key::F)},
+            0xF => {self.window.is_key_down(Key::V)},
+            _ => {false}
         }
     }
 
